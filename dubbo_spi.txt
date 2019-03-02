@@ -1,0 +1,100 @@
+spi设计目标：
+实现在模块装载的时候，不在模块里面写死代码，需要一种服务发现机制.
+java spi就是提供这样的一个机制，为某个接口寻找服务实现的机制，就是将装配的控制权移到代码之外。
+
+spi的约定：
+1、当服务的提供者（Provider），提供了一个接口多种实现时，一般会在jar包的META-INF/services/目录下，创建该接口的同名文件.
+2、该文件里面的内容就是该服务接口的具体实现类的带包名的名称.
+3、而当外部加载这个模块的时候，就能通过jar包META-INF/services/里的配置文件得到具体的实现类名，并加载实例化，完成模块的装配。
+4、使用ServiceLoader<Interface> serviceLoader = ServiceLoader.load(Interface.class);完成装载。
+
+
+dubbo spi优点：
+1、jdk spi一次加载所有的实现类即使没有用到，消耗系统资源,dubbo只加载需要的；
+2、jdk spi不支持ioc、aop，而dubbo支持；
+
+
+dubbo spi约定：
+1、存储路径和jdk spi一致
+2、采用key=value格式(simple=org.apache.dubbo.common.store.support.SimpleDataStore)，而jdk spi只有value(org.apache.dubbo.common.store.support.SimpleDataStore)
+
+dubbo spi的目的：获取一个实现类的对象
+途径：ExtensionLoader.getExtension(String name)
+
+实现路径：
+public static <T> ExtensionLoader<T> getExtensionLoader(Class<T> type)
+public T getAdaptiveExtension()  获取一个扩展类，如果@Adaptive注解在类上就是一个装饰类，如果注解在方法上就一个动态代理类（Protocol$Adaptive）。
+public T getExtension(String name)
+
+-----------ExtensionLoader.getExtensionLoader(Class<T> type);
+ExtensionLoader.getExtensionLoader(Container.class)
+-->this.type=type;
+-->objectFactory = (type == ExtensionFactory.class ? null : ExtensionLoader.getExtensionLoader(ExtensionFactory.class).getAdaptiveExtension());
+	-->ExtensionLoader.getExtensionLoader(ExtensionFactory.class).getAdaptiveExtension());
+		-->this.type=type
+		-->objectFactory=null
+
+		
+result:
+1、每个ExtensionLoader都包含了2个值type和objectFactory；
+Class<?> type;//构造器初始化时要得到的接口名
+ExtensionFactory objectFactory//构造器初始化时AdaptiveExtensionFactory 【SpiExtensionFactory,SpringExtensionFactory】
+2、new两个ExtensionLoader存储在ConcurrentMap<Class<?>,ExtensionLoader<?>> EXTENSION_LOADERS
+
+关于objectFactory的一些细节
+1、objectFactory就是ExtensionFactory,这也是通过ExtensionLoader.getExtensionLoader(ExtensionFactory.class)实现的objectFactory=null
+2、objectFactory作用，它就是为dubbor的IOC提供所有对象。
+
+
+---------------------------getAdaptiveExtension()
+adaptive注解在类和方法上的区别：
+1、注解在类上代表人工实现编码，即实现了一个装饰类（ExtensionFaction）
+2、注解在方法上代表自动生成和编译一个动态的adaptive类（Protocol$Adaptive）
+
+-->createAdaptiveExtension() && cachedAdaptiveInstance
+	-->Class<?> getAdaptiveExtensionClass()
+		-->Map<String, Class<?>> getExtensionClasses()
+			-->Map<String, Class<?>> loadExtensionClasses()  && cachedClasses
+				-->loadDirectory(Map<String, Class<?>> extensionClasses, String dir, String type)
+细节：
+目的：通过把配置文件META-INF/dubbo/internal/com.alibaba.dubbo.rpc.Protocol的内容，储存在缓存变量里。
+cachedAdaptiveClass:如果这个class含有adaptive注解就赋值（如ExtensionFactory，而protocol$adaptive在这个环节是没有的）
+cachedWrapperClasses:只有当该class无adaptive注解，并且构造函数包含目标接口(type)类型（如ProtocolFilterWrapper、ProtocolListenerWrapper）
+cachedActivates:剩下的类，包含Activate注解
+cachedNames:剩下的类就存在这里
+
+					--> cachedDefaultName   &&   void loadDirectory(Map<String, Class<?>> extensionClasses, String dir, String type)
+						-->void loadResource(Map<String, Class<?>> extensionClasses, ClassLoader classLoader, java.net.URL resourceURL)  >> resourceURL = file:/D:/myproject/other/incubator-dubbo-master/dubbo-common/target/classes/META-INF/dubbo/internal/org.apache.dubbo.common.extension.ExtensionFactory
+		-->createAdaptiveExtensionClass()   //自动生成一个动态的Adaptive代理类,这个类是一个代理类
+			-->org.apache.dubbo.common.compiler.Compiler compiler = ExtensionLoader.getExtensionLoader(org.apache.dubbo.common.compiler.Compiler.class).getAdaptiveExtension()
+			-->compiler.compile(code, classLoader)
+	-->injectExtension((T) getAdaptiveExtensionClass().newInstance())
+		-->
+
+		
+		
+		
+		
+		
+------------------------------getExtension(String name)
+T getExtension(String name)  //指定对象缓存在cachedInstances，get出来的对象wrapper对象
+	-->T createExtension(String name)  //指定对象缓存在EXTENSION_INSTANCES
+		-->T injectExtension(T instance)
+			-->objectFactory.getExtension(pt, property); //dubbo的ioc控制反转就是通过spi和spirng来实现的
+				-->SpiExtensionFactory.getExtension(Class<T> type, String name)
+					-->ExtensionLoader.getExtensionLoader(type)
+					-->loader.getAdaptiveExtension()
+				-->SpringExtensionFactory.getExtension(Class<T> type, String name)
+					-->context.getBean(name)
+					-->context.getBean(type)
+		-->instance = injectExtension((T) wrapperClass.getConstructor(type).newInstance(instance))//aop简单实现
+		
+		
+		
+		
+		
+		
+		
+		
+		
+		
